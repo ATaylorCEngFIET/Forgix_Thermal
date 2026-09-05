@@ -1,0 +1,44 @@
+# Efinity Interface Configuration for the Forgix T8F49.
+design.set_device_property("1A","VOLTAGE","3.3","IOBANK")
+design.set_device_property("1B","VOLTAGE","3.3","IOBANK")
+design.set_device_property("1C","VOLTAGE","1.1","IOBANK")
+design.set_device_property("2A","VOLTAGE","3.3","IOBANK")
+design.set_device_property("2B","VOLTAGE","3.3","IOBANK")
+
+design.create_pll_input_clock_gpio("i_clk_32m")
+design.create_block("pll_100m", "PLL")
+design.set_property("pll_100m", "CLKOUT0_PIN", "i_clk_100m", "PLL")
+design.set_property("pll_100m", "CLKOUT1_EN", "1", "PLL")
+design.set_property("pll_100m", "CLKOUT1_PIN", "i_clk_50m", "PLL")
+design.set_property("pll_100m", "LOCKED_PIN", "i_pll_locked", "PLL")
+design.set_property("pll_100m", "REFCLK_FREQ", "32.0", "PLL")
+design.auto_calc_pll_clock("pll_100m", {"CLKOUT0_FREQ": "100.0", "CLKOUT1_FREQ": "50.0"})
+design.create_input_gpio("i_cfg_cs_n")
+design.create_input_gpio("i_cfg_uart_rx")
+design.create_inout_gpio("io_cfg_uart_data")
+design.create_output_gpio("o_cam_cs_n")
+design.create_output_gpio("o_cam_sck")
+design.create_input_gpio("i_cam_miso")
+design.set_property("i_cam_miso","PULL_OPTION","WEAK_PULLUP")
+design.create_output_gpio("o_led_r_n")
+design.create_output_gpio("o_led_g_n")
+design.create_output_gpio("o_led_b_n")
+
+design.set_property("io_cfg_uart_data","IN_PIN","i_cfg_uart_data")
+design.set_property("io_cfg_uart_data","OUT_PIN","o_cfg_uart_data")
+design.set_property("io_cfg_uart_data","OE_PIN","o_cfg_uart_oe")
+
+design.assign_pkg_pin("i_clk_32m","B4")
+design.assign_pkg_pin("i_cfg_cs_n","G3")
+design.assign_pkg_pin("i_cfg_uart_rx","F3")
+design.assign_pkg_pin("io_cfg_uart_data","F2")
+
+# Default Lepton breakout wiring on the Forgix edge connector:
+# Forgix board-edge pin 4 -> Lepton SPI_CS_L, pin 5 -> SPI_CLK, pin 6 <- SPI_MISO.
+design.assign_pkg_pin("o_cam_cs_n","A5")
+design.assign_pkg_pin("o_cam_sck","D7")
+design.assign_pkg_pin("i_cam_miso","C7")
+
+design.assign_pkg_pin("o_led_r_n","E1")
+design.assign_pkg_pin("o_led_g_n","F1")
+design.assign_pkg_pin("o_led_b_n","G1")

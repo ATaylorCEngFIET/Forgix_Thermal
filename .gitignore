@@ -1,0 +1,11 @@
+firmware/build/
+fpga/work_pnr/
+fpga/work_syn/
+fpga/sim/work/
+host/__pycache__/
+tests/__pycache__/
+captures/
+fpga/RUNPNR_*
+fpga/outflow/*
+!fpga/outflow/forgix_lepton.bin
+__pycache__/
