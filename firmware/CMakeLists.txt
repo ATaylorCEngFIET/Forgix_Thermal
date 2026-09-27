@@ -15,7 +15,20 @@ set(CMAKE_CXX_STANDARD 17)
 pico_sdk_init()
 
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
-set(FPGA_IMAGE "${CMAKE_CURRENT_LIST_DIR}/../fpga/outflow/forgix_lepton.bin"
+set(DISPLAY_VARIANT "waveshare_1in8" CACHE STRING "LCD build variant")
+set_property(CACHE DISPLAY_VARIANT PROPERTY STRINGS waveshare_1in8 adafruit_round_1in28)
+
+if(DISPLAY_VARIANT STREQUAL "waveshare_1in8")
+  set(FIRMWARE_TARGET "forgix_lepton_waveshare_1in8")
+  set(DEFAULT_FPGA_IMAGE "${CMAKE_CURRENT_LIST_DIR}/../fpga/outflow/forgix_lepton.bin")
+elseif(DISPLAY_VARIANT STREQUAL "adafruit_round_1in28")
+  set(FIRMWARE_TARGET "forgix_lepton_adafruit_round_1in28")
+  set(DEFAULT_FPGA_IMAGE "${CMAKE_CURRENT_LIST_DIR}/../fpga/outflow/forgix_lepton_round.bin")
+else()
+  message(FATAL_ERROR "Unknown DISPLAY_VARIANT: ${DISPLAY_VARIANT}")
+endif()
+
+set(FPGA_IMAGE "${DEFAULT_FPGA_IMAGE}"
     CACHE FILEPATH "Built Forgix Lepton passive-SPI image")
 set(GENERATED_IMAGE_C "${CMAKE_CURRENT_BINARY_DIR}/generated/fpga_image.c")
 
@@ -29,24 +42,22 @@ add_custom_command(
   VERBATIM
 )
 
-add_executable(forgix_lepton_bridge
+add_executable(${FIRMWARE_TARGET}
   src/crc32.c
   src/fpga_config.c
   src/lepton_cci.c
   src/main.c
+  src/thermal_display.c
   src/usb_stream.c
   src/video_receiver.c
   "${GENERATED_IMAGE_C}"
 )
 
-target_include_directories(forgix_lepton_bridge PRIVATE include)
-target_compile_options(forgix_lepton_bridge PRIVATE
+target_include_directories(${FIRMWARE_TARGET} PRIVATE include)
+target_compile_options(${FIRMWARE_TARGET} PRIVATE
   $<$<COMPILE_LANGUAGE:C>:-Wall;-Wextra;-Werror>
 )
-target_compile_definitions(forgix_lepton_bridge PRIVATE
-  PICO_STDIO_USB_CONNECTION_WITHOUT_DTR=1
-)
-target_link_libraries(forgix_lepton_bridge
+target_link_libraries(${FIRMWARE_TARGET}
   pico_stdlib
   hardware_dma
   hardware_i2c
@@ -54,6 +65,10 @@ target_link_libraries(forgix_lepton_bridge
   hardware_uart
 )
 
-pico_enable_stdio_usb(forgix_lepton_bridge 1)
-pico_enable_stdio_uart(forgix_lepton_bridge 0)
-pico_add_extra_outputs(forgix_lepton_bridge)
+if(DISPLAY_VARIANT STREQUAL "adafruit_round_1in28")
+  target_compile_definitions(${FIRMWARE_TARGET} PRIVATE DISPLAY_GC9A01A_ROUND=1)
+endif()
+
+pico_enable_stdio_usb(${FIRMWARE_TARGET} 1)
+pico_enable_stdio_uart(${FIRMWARE_TARGET} 0)
+pico_add_extra_outputs(${FIRMWARE_TARGET})

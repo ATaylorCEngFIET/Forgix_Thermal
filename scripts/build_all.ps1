@@ -3,17 +3,19 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+$projectRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 
 Push-Location $projectRoot
 try {
-  & .\lepton_thermal\fpga\scripts\build_efinity.ps1 -EfinityRoot $EfinityRoot
-  if ($LASTEXITCODE -ne 0) {
-    throw "FPGA build failed with exit code $LASTEXITCODE"
-  }
-  & .\lepton_thermal\scripts\build_firmware.ps1
-  if ($LASTEXITCODE -ne 0) {
-    throw "Firmware build failed with exit code $LASTEXITCODE"
+  foreach ($variant in @("waveshare_1in8", "adafruit_round_1in28")) {
+    & .\fpga\scripts\build_efinity.ps1 -EfinityRoot $EfinityRoot -Variant $variant
+    if ($LASTEXITCODE -ne 0) {
+      throw "FPGA build failed for $variant with exit code $LASTEXITCODE"
+    }
+    & .\scripts\build_firmware.ps1 -Variant $variant
+    if ($LASTEXITCODE -ne 0) {
+      throw "Firmware build failed for $variant with exit code $LASTEXITCODE"
+    }
   }
 }
 finally {

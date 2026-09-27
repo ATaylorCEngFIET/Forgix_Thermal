@@ -1,140 +1,193 @@
-# Forgix + FLIR Lepton 3.5 USB thermal camera
+# Forgix + FLIR Lepton 3.5 standalone thermal imager
 
-This folder is a self-contained implementation for the official FLIR Lepton
-Breakout Board v2.0 and a Forgix RP2354 + Efinix Trion T8 board. The FPGA
-captures 160 x 120 TLinear video over VoSPI, the RP2354 configures the camera
-over CCI/I2C and assembles frames, and USB CDC carries CRC-checked images to a
-Python live viewer.
+This repository implements a standalone 160 x 120 thermal imager using the
+Forgix RP2354 + Efinix Trion T8 board, the official FLIR Lepton Breakout Board
+v2.0, and either the Waveshare 1.8inch ST7735S LCD or the Adafruit 1.28inch
+240x240 round GC9A01A LCD. USB-C can be used only for power: the selected LCD
+shows the live thermal image without a PC. The existing USB CDC image stream
+and Python viewer remain available when a computer is connected.
 
-The project builds, its protocol simulations/tests pass, and it has been
-verified on the connected Lepton 3.5 at 9 complete frames per second with
-matched segment counts and no FPGA or transport errors.
+If a Lepton is absent or has not produced a complete frame for one second, the
+LCD shows a moving color-bar and thermal-palette test pattern. Firmware retries
+camera configuration every ten seconds, so a newly connected camera can take
+over without reflashing.
+
+The Lepton capture path has been verified on hardware at 9 complete frames per
+second. Separate UF2 files embed the correct FPGA image and Pico display sizing
+for each LCD; install only the UF2 matching the connected controller.
 
 ## Architecture
 
 ```text
-Lepton 3.5 on BOB v2.0
-  |  CCI/I2C, 100 kHz                  |  VoSPI mode 3, 12.5 MHz
+FLIR Lepton 3.5 on Breakout Board v2.0
+  | CCI/I2C, 100 kHz                 | VoSPI mode 3, 12.5 MHz
+  v                                   v
+Forgix RP2354                   Forgix Efinix T8 FPGA
+  camera setup                   packet/segment validation
+  FPGA configuration            11.25 KiB segment FIFO
+  DMA UART RX  <--------------   8.333 Mbaud captured pixels
+  frame assembly + palette
+  DMA UART TX  -------------->   RGB565 stream + selected LCD controller
+  | USB CDC (optional)                 | SPI mode 0, 12.5 MHz
   v                                    v
-Forgix RP2354                    Forgix Efinix T8 FPGA
-  camera setup                    packet/segment validation
-  FPGA configuration             11.25 KiB segment FIFO
-  DMA UART receive      <------   8.333 Mbaud framed UART
-  160x120 frame assembly
-  |  USB full-speed CDC, 38432 bytes/frame + CRC32
-  v
-Python viewer (temperature, contrast, FFC, capture)
+Python viewer                    ST7735S: 160x120 in 160x128 landscape
+                                 GC9A01A: 192x144 centered in 240x240
 ```
 
-The FPGA handles the timing-sensitive VoSPI link and recognizes Lepton 3.x
-four-segment frames. It speculatively buffers packets 0 through 19 because the
-segment number first appears in packet 20, rejects discard packets, segment
-zero, and repeated segment 4, and validates packet order. Because the breakout
-has no VSYNC connection, CS remains asserted while the FPGA finds segment
-boundaries over SPI. A one-second no-descriptor watchdog performs the required
-250 ms CS-high resynchronization after FFC or a stalled stream. The FPGA packs
-each Raw14 pixel pair into three bytes, so the RP2354 receives 7,200-byte
-segments by DMA and double-buffers the final 38,400-byte images.
+The internal RP2354-to-FPGA runtime UART is full duplex. The FPGA sends packed
+Lepton segments to the RP2354 on GPIO3. The RP2354 auto-contrasts and colorizes
+a completed frame into RGB565, then a second DMA channel sends the display
+bytes back to the FPGA on GPIO2. The Waveshare build sends 38,400 bytes at
+160x120. The round build nearest-neighbour scales to 192x144 and sends 55,296
+bytes. The FPGA initializes the selected controller and streams directly, so
+no LCD frame buffer is required in the FPGA.
 
-## Breakout-board wiring
+Because the Lepton breakout has no VSYNC connection, the FPGA searches using
+individually framed discard packets until it finds packet zero. It then keeps
+CS asserted continuously through the complete 60-packet segment and releases
+it after a post-SCK hold interval. Raising CS on the final sampling edge can
+shift the Lepton packet phase and eventually stop valid frames. A one-second
+no-descriptor watchdog performs a 250 ms CS-high resynchronization after FFC or
+a stalled stream.
 
-The table uses the 20-pin, 0.1-inch breakout header numbering from the FLIR
-Breakout Board v2.0 datasheet. The Forgix board-edge numbers are the Teensy-form
-factor labels used by this project.
+## LCD wiring
+
+These are the Forgix board-edge numbers printed on the IO ring, counting from
+0. Pins 9 through 14 connect directly to unused 3.3 V FPGA IO and do not
+conflict with the Lepton or RP2354 signals.
+
+| Waveshare / Adafruit LCD pin | Forgix connection | FPGA package pin | Function |
+|---|---|---|---|
+| VCC | 3.3 V | - | Use 3.3 V, not 5 V. |
+| GND | GND | - | Common ground. |
+| DIN / MOSI | board pin 9 | D6 | SPI MOSI/data. |
+| CLK / SCK | board pin 10 | G7 | SPI mode 0: 12.5 MHz Waveshare, 8.33 MHz round display. |
+| CS / TFTCS | board pin 11 | G5 | Active-low chip select. |
+| DC | board pin 12 | G2 | Command/data select. |
+| RST | board pin 13 | F5 | Active-low hardware reset. |
+| BL | board pin 14 | F6 | Backlight enable. |
+
+The module accepts either 3.3 V or 5 V power, but its logic level follows its
+supply. Powering it from 5 V would expose the FPGA to 5 V logic and is not
+supported by this design. Keep the SPI wiring short and connect VCC/GND before
+the signal wires.
+
+The Waveshare variant uses landscape ST7735S mode (`MADCTL=0xA0`), RGB565, the
+module-specific `+1,+2` offsets, and a centered 160x120 image. The Adafruit
+variant initializes the GC9A01A and places a 192x144 4:3 image at x=24..215,
+y=48..191 so all four corners remain inside the round aperture. Leave the
+Adafruit MISO and SDCS pins unconnected; this design does not use the microSD
+socket. Both modules use the same Forgix signal pins shown above.
+
+## Lepton breakout wiring
+
+The FLIR column uses the 20-pin, 0.1-inch header numbering from the official
+Breakout Board v2.0 datasheet. Forgix numbers again count from 0.
 
 | Forgix connection | FLIR breakout v2.0 | Direction | Notes |
 |---|---|---|---|
-| GND | pin 1 or 19, GND | - | A common ground is mandatory. |
-| 3.3 V or a suitable 5 V rail | pin 2, Power in | to camera | Input is 3 to 5.5 V. Check the R120 erratum below. |
-| board pin 2 / RP2354 GPIO22 | pin 5, SDA | bidirectional | Diagnostic firmware enables a weak internal pull-up to 3.3 V; external 4.7 kOhm to `VCC28_IO` is preferred. |
-| board pin 3 / RP2354 GPIO23 | pin 8, SCL | bidirectional | Diagnostic firmware enables a weak internal pull-up to 3.3 V; external 4.7 kOhm to `VCC28_IO` is preferred. |
-| board pin 4 / FPGA A5 | pin 10, `SPI_CS` | to camera | Pass through a 3.3 V to 2.8 V level translator. |
-| board pin 5 / FPGA D7 | pin 7, `SPI_CLK` | to camera | Pass through a fast 3.3 V to 2.8 V level translator. |
-| board pin 6 / FPGA C7 | pin 12, `SPI_MISO` | from camera | 2.8 V is normally a valid T8 3.3 V-bank high; a translator is the conservative choice. |
-| GND | pin 9, `SPI_MOSI` | - | VoSPI does not use MOSI; hold the unused input low. |
+| GND | pin 1 or 19, GND | - | Common ground is mandatory. |
+| 3.3 V or suitable 5 V rail | pin 2, Power in | to camera | Input is 3 to 5.5 V; check the R120 erratum below. |
+| board pin 2 / RP2354 GPIO22 | pin 5, SDA | bidirectional | Internal 3.3 V pull-up is enabled; external 4.7 kOhm to `VCC28_IO` is preferred. |
+| board pin 3 / RP2354 GPIO23 | pin 8, SCL | bidirectional | Internal 3.3 V pull-up is enabled; external 4.7 kOhm to `VCC28_IO` is preferred. |
+| board pin 4 / FPGA A5 | pin 10, `SPI_CS` | to camera | Use a 3.3 V to 2.8 V level translator. |
+| board pin 5 / FPGA D7 | pin 7, `SPI_CLK` | to camera | Use a fast 3.3 V to 2.8 V translator. |
+| board pin 6 / FPGA C7 | pin 12, `SPI_MISO` | from camera | A translator is the conservative choice. |
+| GND | pin 9, `SPI_MOSI` | - | VoSPI does not use MOSI; hold it low. |
 
-The current diagnostic build enables the RP2354's weak internal 3.3 V pull-ups on
-SDA/SCL at the user's direction. Both lines now idle high, but external 4.7 kOhm
-pull-ups to breakout pin 6 (VCC28_IO) remain the robust choice. Do not drive the
-Lepton's SPI inputs with raw 3.3 V; use a fast level translator for 12.5 MHz.
+Leave J5-J9 in their factory positions so the breakout supplies the 1.2 V and
+2.8 V rails, 25 MHz master clock, and normal power sequence. FLIR notes that
+breakout assembly R120 has D1 reversed and cannot be powered through its usual
+J2 pin 2; use the documented J3 pin 2 power point on that revision.
 
-Leave the breakout's J5-J9 jumpers in their factory-installed positions so it
-provides the 1.2 V and 2.8 V rails, 25 MHz master clock, and normal power-up
-sequence. `RESET_L`, `PW_DWN_L`, `MASTER_CLK`, `VCC12`, and `VCC28` therefore do
-not need Forgix connections. FLIR notes that breakout assembly R120 has D1
-reversed and cannot be powered through its usual J2 pin 2; use the documented
-J3 pin 2 power point on that revision.
+## Startup and fallback behavior
 
-If your Forgix header revision uses different labels, change the three package
-pins in `fpga/constraints/forgix_lepton_io.isf` and the two RP GPIO definitions
-in `firmware/include/board_config.h` before building.
+At power-up the RP2354 loads the FPGA image embedded in the UF2. The FPGA then
+initializes and clears the LCD. The first test pattern is sent after one second,
+so a screen is visible even without a camera or USB host.
 
-## Camera configuration
+After the Lepton's five-second boot/automatic-FFC interval, firmware tries CCI
+address `0x2a` and configures telemetry off, AGC on, video enabled, RAW14 output,
+and the known-good GPIO/VSYNC mode. A valid frame replaces the test pattern.
+If no valid frame arrives for one second, the pattern returns. Failed camera
+configuration is retried every ten seconds.
 
-After the five-second Lepton startup/automatic-FFC interval, the firmware uses
-CCI address `0x2a` to:
+Type `FFC` followed by Enter on the USB serial port, or press `F` in the Python
+viewer, to request a manual flat-field correction while a camera is configured.
 
-- wait for `BOOTED=1`, `BUSY=0`, and FFC completion;
-- disable VoSPI telemetry so every segment remains 60 packets;
-- enable radiometry and TLinear output at 0.01 kelvin/count;
-- select 16-bit RAW14 VoSPI output.
-
-Type `FFC` followed by Enter on the USB serial port, or press `F` in the viewer,
-to request a manual flat-field correction.
-
-## Build
+## Build and test
 
 Requirements are Efinity 2025.2, Pico SDK 2.2.0 with the ARM GCC toolchain,
-CMake/Ninja, Python 3.10+, and Questa/ModelSim for FPGA simulation. From the
+CMake/Ninja, Python 3.10+, and Questa/ModelSim for RTL simulation. From the
 repository root:
 
 ```powershell
-# FPGA implementation followed by RP2354 firmware embedding that image
-.\lepton_thermal\scripts\build_all.ps1
+# Build both FPGA variants and both RP2354 UF2 files
+.\scripts\build_all.ps1
 
-# Packet-capture and UART RTL simulations
-.\lepton_thermal\fpga\scripts\run_sim.ps1
+# Seven RTL runs, including both LCD controllers and consecutive frames
+.\fpga\scripts\run_sim.ps1
 
-# Host protocol tests (no third-party packages needed)
-python -m unittest discover -s .\lepton_thermal\tests -v
+# Four host protocol tests
+python -m unittest discover -s .\tests -v
 ```
 
 The checked build produces:
 
-- `lepton_thermal/fpga/outflow/forgix_lepton.bin` (173,380 bytes);
-- `lepton_thermal/firmware/build/forgix_lepton_bridge.uf2` (423,936 bytes).
+- `fpga/outflow/forgix_lepton.bin` (173,380 bytes);
+- `fpga/outflow/forgix_lepton_round.bin` (173,380 bytes);
+- `dist/forgix_lepton_waveshare_1in8.uf2`;
+- `dist/forgix_lepton_adafruit_round_1in28.uf2`.
 
-Post-route usage is 798/7,384 logic elements and 21/24 memory blocks. The 32 MHz
-clock closes with +1.243 ns setup and +0.375 ns hold slack.
+To rebuild only one package, pass `-Variant waveshare_1in8` or
+`-Variant adafruit_round_1in28` to both `fpga/scripts/build_efinity.ps1` and
+`scripts/build_firmware.ps1`.
+
+Both routed images meet the 50 MHz constraint with positive setup and hold
+slack. The final Waveshare image has +0.271 ns setup / +0.401 ns hold; the
+round-display image has +1.292 ns setup / +0.586 ns hold.
 
 ## Flash and run
 
 Put Forgix in RP2354 BOOTSEL mode by holding its `PROGRAM` pad low while
-connecting USB, then copy the UF2 to the mounted drive. If compatible firmware
-is already running, `picotool` can be used instead:
+connecting USB, then copy the UF2 matching the connected display to the drive:
 
-```powershell
-picotool load -f -x .\lepton_thermal\firmware\build\forgix_lepton_bridge.uf2
+```text
+dist/forgix_lepton_waveshare_1in8.uf2
+dist/forgix_lepton_adafruit_round_1in28.uf2
 ```
 
-The UF2 contains the FPGA bitstream, so the RP2354 programs the T8 at every
-boot; no separate FPGA programmer is required.
+If compatible firmware is already running, `picotool` can load and reboot it:
 
-Install and launch the host viewer:
+```powershell
+picotool load -f -x .\dist\forgix_lepton_waveshare_1in8.uf2
+```
+
+The UF2 contains the FPGA bitstream. The RP2354 programs the T8 on every boot;
+there is no separate FPGA image to flash.
+
+USB is optional for normal display operation. A USB-C supply or power bank is
+enough after the UF2 has been installed.
+
+## Optional PC viewer
 
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r .\lepton_thermal\host\requirements.txt
-python .\lepton_thermal\host\viewer.py
+python -m pip install -r .\host\requirements.txt
+python .\host\viewer.py
 ```
 
 The viewer auto-detects a single Raspberry Pi USB serial device. With several
 connected, select one explicitly, for example:
 
 ```powershell
-python .\lepton_thermal\host\viewer.py --port COM11 --rotate 180
+python .\host\viewer.py --port COM11 --rotate 180
 ```
+
+USB image transfer is disabled by default so a PC connection used only for
+power cannot apply CDC backpressure to the standalone display. The viewer sends
+the STREAM ON command when it opens the port and STREAM OFF when it exits.
 
 Viewer keys are `F` for FFC, `A` for auto-contrast, and `S` to save both a
 temperature `.npy` array and a colorized PNG under `captures/`.
@@ -142,34 +195,39 @@ temperature `.npy` array and a colorized PNG under `captures/`.
 ## Status and troubleshooting
 
 The Forgix RGB LED is active-low: green is a heartbeat, blue indicates active
-FPGA-to-RP streaming, and red latches after a capture/FIFO error.
+FPGA-to-RP video, and red latches after a capture/FIFO error or LCD UART
+framing/overrun error.
 
-- No USB device: confirm the UF2 is loaded and use Device Manager or
-  `python -m serial.tools.list_ports` to find the port.
-- `LEPTON_ERROR cci=...`: verify 2.8 V I2C pull-ups, address `0x2a`, breakout
-  power, installed jumpers, and the full five-second startup delay. If the
-  diagnostic shows `sda=0 scl=0`, both lines lack pull-ups or are held low;
-  the diagnostic firmware enables RP2354 internal pull-ups and retries setup.
-- Red LED or no frames: scope `SPI_CS`, `SPI_CLK`, and `SPI_MISO`; clock should
-  be mode 3 at 12.5 MHz. Check level-shifter direction and bandwidth.
-- Repeated FPGA errors: keep SPI wiring short, verify a clean 2.8 V reference,
-  and confirm the module is a Lepton 3.x 160 x 120 device.
-- The FPGA currently validates VoSPI packet IDs and ordering but does not check
-  the Lepton packet CRC field; the RP-to-host image payload has IEEE CRC-32.
-- Temperatures look wrong: the viewer expects TLinear 0.01 K/count. Verify that
-  camera configuration succeeds rather than treating generic Raw14 counts as
-  absolute temperature.
+- Blank LCD and backlight off: check LCD VCC is 3.3 V, common ground, RST on
+  board pin 13, and BL on board pin 14.
+- Backlight on but blank image: verify DIN/CLK/CS/DC are on board pins 9/10/11/12
+  respectively and that the numbering starts at 0.
+- Test pattern only: verify Lepton power, I2C address `0x2a`, 2.8 V pull-ups,
+  jumpers, and the level-shifted VoSPI wiring on pins 4-6.
+- Red LED: power-cycle once, then scope the applicable UART, Lepton SPI, or LCD
+  SPI link. LCD mode is 0 (12.5 MHz Waveshare or 8.33 MHz round); Lepton is
+  mode 3 at 12.5 MHz.
+- LCD colors swapped, blank, or displaced: confirm that the installed UF2
+  matches the ST7735S Waveshare or GC9A01A Adafruit module actually connected.
+- Temperatures look wrong in the PC viewer: it expects TLinear 0.01 K/count;
+  ensure camera configuration succeeds.
+- `fpgaerr=1 code=5 raw=0xfff` immediately after startup is the enabled raw
+  discard-header probe, not a capture failure. Its routed implementation is
+  retained because it was hardware-verified for stable 12.5 MHz capture.
 
 ## Folder layout
 
-- `fpga/rtl`: synthesizable VoSPI master, segment FIFO, formatter, and UART.
-- `fpga/sim`: self-checking capture and UART simulations.
+- `fpga/rtl`: VoSPI capture, FIFO/formatter, bidirectional UART, and selectable ST7735S/GC9A01A engine.
+- `fpga/sim`: self-checking FIFO, UART, capture, formatter, and LCD simulations.
 - `fpga/constraints`: Forgix T8F49 clock and package-pin assignments.
-- `firmware`: Pico SDK C application, camera CCI driver, DMA receiver, USB link.
+- `firmware`: Pico SDK camera setup, frame assembly, palette/test pattern, DMA, and USB.
 - `host`: incremental CRC-checked protocol decoder and Matplotlib viewer.
 - `tests`: host protocol resynchronization and corruption tests.
 - `scripts`: complete and firmware-only PowerShell builds.
 
-Reference documents: [FLIR Lepton technical documentation](https://oem.flir.com/developer/lepton-family/lepton-technical-documentation/),
-[official Breakout Board v2.0 datasheet](https://www.mouser.com/datasheet/2/813/DS_16912_FLiR_Lepton___Breakout_Board_V2-3247571.pdf),
-and [Forgix getting-started guide](https://www.hackster.io/adam-taylor/getting-started-with-forgix-4c72eb).
+References: [Waveshare 1.8inch LCD Module wiki](https://www.waveshare.com/wiki/1.8inch_LCD_Module),
+[Waveshare reference ST7735S driver](https://github.com/waveshare/WSLCD1in8/blob/master/LCD_Driver.cpp),
+[Adafruit GC9A01A driver](https://github.com/adafruit/Adafruit_GC9A01A),
+[FLIR Lepton technical documentation](https://oem.flir.com/developer/lepton-family/lepton-technical-documentation/),
+[FLIR Breakout Board v2.0 datasheet](https://www.mouser.com/datasheet/2/813/DS_16912_FLiR_Lepton___Breakout_Board_V2-3247571.pdf),
+and the [Forgix hardware repository](https://github.com/controlpaths/forgix).

@@ -15,6 +15,8 @@ struct thermal_frame {
 };
 
 void video_receiver_init(void);
+void video_receiver_quiesce(void);
+void video_receiver_restart(void);
 void video_receiver_poll(void);
 bool video_receiver_take_frame(struct thermal_frame *frame);
 void video_receiver_release_frame(void);

@@ -49,6 +49,28 @@ static size_t g_payload_index;
 static size_t g_payload_length;
 static uint8_t g_packed_pixels[3];
 
+static void configure_uart_dma(void) {
+    uart_init(FPGA_UART_INSTANCE, FPGA_UART_BAUD_HZ);
+    uart_set_format(FPGA_UART_INSTANCE, 8, 1, UART_PARITY_NONE);
+    uart_set_fifo_enabled(FPGA_UART_INSTANCE, true);
+    // Forgix reuses RP2354 GPIO2/GPIO3 after passive-SPI configuration.
+    // On these pads UART function 2 is CTS/RTS; function 11 (UART_AUX) is
+    // the UART0 TX/RX mapping needed by the FPGA runtime link.
+    gpio_set_function(FPGA_UART_PIN_TX, GPIO_FUNC_UART_AUX);
+    gpio_set_function(FPGA_UART_PIN_RX, GPIO_FUNC_UART_AUX);
+
+    g_dma_read_index = 0;
+    dma_channel_config config = dma_channel_get_default_config(g_dma_channel);
+    channel_config_set_transfer_data_size(&config, DMA_SIZE_8);
+    channel_config_set_read_increment(&config, false);
+    channel_config_set_write_increment(&config, true);
+    channel_config_set_dreq(&config, DREQ_UART0_RX);
+    channel_config_set_ring(&config, true, FPGA_UART_RX_RING_BITS);
+    dma_channel_configure(g_dma_channel, &config,
+                          g_dma_ring, &uart_get_hw(FPGA_UART_INSTANCE)->dr,
+                          0xffffffffu, true);
+}
+
 static uint16_t read_u16_le(const uint8_t *data) {
     return (uint16_t)data[0] | ((uint16_t)data[1] << 8u);
 }
@@ -203,25 +225,25 @@ void video_receiver_init(void) {
     g_last_fpga_error_detail = 0;
     reset_parser();
 
-    uart_init(FPGA_UART_INSTANCE, FPGA_UART_BAUD_HZ);
-    uart_set_format(FPGA_UART_INSTANCE, 8, 1, UART_PARITY_NONE);
-    uart_set_fifo_enabled(FPGA_UART_INSTANCE, true);
-    // Forgix reuses RP2354 GPIO2/GPIO3 after passive-SPI configuration.
-    // On these pads UART function 2 is CTS/RTS; function 11 (UART_AUX) is
-    // the UART0 TX/RX mapping needed by the FPGA runtime link.
-    gpio_set_function(FPGA_UART_PIN_TX, GPIO_FUNC_UART_AUX);
-    gpio_set_function(FPGA_UART_PIN_RX, GPIO_FUNC_UART_AUX);
-
     g_dma_channel = dma_claim_unused_channel(true);
-    dma_channel_config config = dma_channel_get_default_config(g_dma_channel);
-    channel_config_set_transfer_data_size(&config, DMA_SIZE_8);
-    channel_config_set_read_increment(&config, false);
-    channel_config_set_write_increment(&config, true);
-    channel_config_set_dreq(&config, DREQ_UART0_RX);
-    channel_config_set_ring(&config, true, FPGA_UART_RX_RING_BITS);
-    dma_channel_configure(g_dma_channel, &config,
-                          g_dma_ring, &uart_get_hw(FPGA_UART_INSTANCE)->dr,
-                          0xffffffffu, true);
+    configure_uart_dma();
+}
+
+void video_receiver_quiesce(void) {
+    dma_channel_abort(g_dma_channel);
+    uart_deinit(FPGA_UART_INSTANCE);
+    g_ready = false;
+    g_assembling = false;
+    g_expected_segment = 1u;
+    reset_parser();
+}
+
+void video_receiver_restart(void) {
+    g_ready = false;
+    g_assembling = false;
+    g_expected_segment = 1u;
+    reset_parser();
+    configure_uart_dma();
 }
 
 void video_receiver_poll(void) {

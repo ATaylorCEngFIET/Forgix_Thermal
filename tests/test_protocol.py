@@ -3,7 +3,7 @@ from __future__ import annotations
 import struct
 import unittest
 
-from lepton_thermal.host.protocol import FrameDecoder, encode_frame
+from host.protocol import FrameDecoder, encode_frame
 
 
 class FrameDecoderTests(unittest.TestCase):

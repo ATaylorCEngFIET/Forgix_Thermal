@@ -43,10 +43,13 @@ entity lepton_vospi_capture is
 end entity;
 
 architecture rtl of lepton_vospi_capture is
-  type t_capture_state is (resync_state, packet_gap_state, cs_setup_state,
-                           drain_state, capture_state);
+  type t_capture_state is (resync_state, cs_hold_state, packet_gap_state,
+                           cs_setup_state, drain_state, capture_state);
   type t_segment_state is (no_segment, segment_unknown, segment_accept, segment_drop);
   subtype t_resync_count is natural range 0 to G_INITIAL_RESYNC_CYCLES - 1;
+  constant C_WATCHDOG_DIVISOR : positive := 256;
+  constant C_WATCHDOG_TICKS   : positive :=
+      (G_WATCHDOG_CYCLES + C_WATCHDOG_DIVISOR - 1) / C_WATCHDOG_DIVISOR;
 
   signal s_state          : t_capture_state := resync_state;
   signal s_segment_state  : t_segment_state := no_segment;
@@ -54,6 +57,7 @@ architecture rtl of lepton_vospi_capture is
   signal s_initial_resync : std_logic := '1';
   signal s_sck            : std_logic := '1';
   signal s_spi_div        : natural range 0 to 1 := 0;
+  signal s_hold_count     : natural range 0 to G_CS_SETUP_CYCLES - 1 := 0;
   signal s_gap_count      : natural range 0 to G_PACKET_GAP_CYCLES - 1 := 0;
   signal s_setup_count    : natural range 0 to G_CS_SETUP_CYCLES - 1 := 0;
   signal s_shift          : t_byte := (others => '0');
@@ -69,7 +73,9 @@ architecture rtl of lepton_vospi_capture is
   signal s_probe_count    : natural range 0 to 4095 := 0;
   signal s_probe_header0  : std_logic := '0';
   signal s_search_count   : natural range 0 to G_SEARCH_PACKETS - 1 := 0;
-  signal s_watchdog_count : natural range 0 to G_WATCHDOG_CYCLES - 1 := 0;
+  signal s_watchdog_div   : natural range 0 to C_WATCHDOG_DIVISOR - 1 := 0;
+  signal s_watchdog_count : natural range 0 to C_WATCHDOG_TICKS - 1 := 0;
+  signal s_watchdog_expired : std_logic := '0';
   signal s_pack_hi_a      : t_byte := (others => '0');
   signal s_pack_lo_a      : t_byte := (others => '0');
   signal s_pack_hi_b      : t_byte := (others => '0');
@@ -77,7 +83,6 @@ architecture rtl of lepton_vospi_capture is
   procedure enter_resync(
     signal state          : out t_capture_state;
     signal segment_state  : out t_segment_state;
-    signal resync_count   : out t_resync_count;
     signal sck            : out std_logic;
     signal in_candidate   : out std_logic;
     signal expected_seg   : out natural range 1 to 4
@@ -85,13 +90,13 @@ architecture rtl of lepton_vospi_capture is
   begin
     state         <= resync_state;
     segment_state <= no_segment;
-    resync_count  <= 0;
     sck           <= '1';
     in_candidate  <= '0';
     expected_seg  <= 1;
   end procedure;
 begin
-  o_cam_cs_n <= '0' when s_state = cs_setup_state or
+  o_cam_cs_n <= '0' when s_state = cs_hold_state or
+                           s_state = cs_setup_state or
                            s_state = capture_state else '1';
   o_cam_sck  <= s_sck;
 
@@ -110,6 +115,13 @@ begin
       o_sync_pulse    <= '0';
       o_error_pulse   <= '0';
 
+      -- Keep the long resynchronization counter at zero outside its state.
+      -- This prevents unrelated packet-decode conditions from entering the
+      -- counter clock-enable path.
+      if s_state /= resync_state then
+        s_resync_count <= 0;
+      end if;
+
       if i_rst = '1' then
         s_state            <= resync_state;
         s_segment_state    <= no_segment;
@@ -117,6 +129,7 @@ begin
         s_initial_resync   <= '1';
         s_sck              <= '1';
         s_spi_div          <= 0;
+        s_hold_count       <= 0;
         s_gap_count        <= 0;
         s_setup_count      <= 0;
         s_shift            <= (others => '0');
@@ -132,7 +145,9 @@ begin
         s_probe_count      <= 0;
         s_probe_header0    <= '0';
         s_search_count     <= 0;
+        s_watchdog_div     <= 0;
         s_watchdog_count   <= 0;
+        s_watchdog_expired <= '0';
         s_pack_hi_a        <= (others => '0');
         s_pack_lo_a        <= (others => '0');
         s_pack_hi_b        <= (others => '0');
@@ -140,19 +155,22 @@ begin
         o_desc_segment     <= (others => '0');
         o_desc_frame       <= (others => '0');
         o_error_code       <= (others => '0');
-      elsif s_state /= resync_state and
-            s_watchdog_count = G_WATCHDOG_CYCLES - 1 then
+      elsif s_state /= resync_state and s_watchdog_expired = '1' then
         -- Periodic FFC can leave a no-VSYNC reader searching indefinitely.
         -- Force the documented /CS-high resynchronization when no numbered
         -- segment descriptor has appeared for one second.
-        s_watchdog_count <= 0;
+        s_watchdog_div     <= 0;
+        s_watchdog_count   <= 0;
+        s_watchdog_expired <= '0';
         o_fifo_rollback  <= '1';
         o_error_code     <= to_unsigned(16#7000#, o_error_code'length);
         o_error_pulse    <= '1';
-        enter_resync(s_state, s_segment_state, s_resync_count,
+        enter_resync(s_state, s_segment_state,
                      s_sck, s_in_candidate, s_expected_segment);
       elsif s_state = resync_state then
-        s_watchdog_count <= 0;
+        s_watchdog_div     <= 0;
+        s_watchdog_count   <= 0;
+        s_watchdog_expired <= '0';
         s_sck <= '1';
         s_spi_div <= 0;
         if (s_initial_resync = '1' and
@@ -172,6 +190,20 @@ begin
           o_sync_pulse      <= '1';
         else
           s_resync_count <= s_resync_count + 1;
+        end if;
+
+      elsif s_state = cs_hold_state then
+        -- Keep /CS asserted after the final sampling edge. Raising SCK and
+        -- /CS in the same fabric cycle gives the Lepton no select hold time
+        -- and eventually shifts its packet phase.
+        s_sck     <= '1';
+        s_spi_div <= 0;
+        if s_hold_count = G_CS_SETUP_CYCLES - 1 then
+          s_hold_count <= 0;
+          s_gap_count  <= 0;
+          s_state      <= packet_gap_state;
+        else
+          s_hold_count <= s_hold_count + 1;
         end if;
 
       elsif s_state = packet_gap_state then
@@ -212,7 +244,20 @@ begin
           s_expected_packet <= 0;
         end if;
       else
-        s_watchdog_count <= s_watchdog_count + 1;
+        -- Prescale the one-second watchdog so its terminal comparison does
+        -- not sit on the state-machine reset path. Expiry is registered and
+        -- acted on during the following clock cycle.
+        if s_watchdog_div = C_WATCHDOG_DIVISOR - 1 then
+          s_watchdog_div <= 0;
+          if s_watchdog_count = C_WATCHDOG_TICKS - 1 then
+            s_watchdog_count   <= 0;
+            s_watchdog_expired <= '1';
+          else
+            s_watchdog_count <= s_watchdog_count + 1;
+          end if;
+        else
+          s_watchdog_div <= s_watchdog_div + 1;
+        end if;
         if s_spi_div = 1 then
           s_spi_div <= 0;
           -- Mode 3: falling edges ask the Lepton to change data and rising
@@ -276,7 +321,7 @@ begin
                       16#1000# + (s_expected_packet mod 64) * 64 + 63,
                       o_error_code'length);
                   o_error_pulse <= '1';
-                  enter_resync(s_state, s_segment_state, s_resync_count,
+                  enter_resync(s_state, s_segment_state,
                                s_sck, s_in_candidate, s_expected_segment);
                 else
                   o_fifo_rollback   <= '1';
@@ -311,7 +356,7 @@ begin
                         (v_packet mod 64),
                         o_error_code'length);
                     o_error_pulse <= '1';
-                    enter_resync(s_state, s_segment_state, s_resync_count,
+                    enter_resync(s_state, s_segment_state,
                                  s_sck, s_in_candidate, s_expected_segment);
                   end if;
                 end if;
@@ -341,7 +386,9 @@ begin
                       s_probe_count   <= 1;
                       s_search_count  <= 0;
                       o_desc_valid     <= '1';
+                      s_watchdog_div   <= 0;
                       s_watchdog_count <= 0;
+                      s_watchdog_expired <= '0';
                       o_desc_segment  <= to_unsigned(v_segment, o_desc_segment'length);
                       if v_segment = 1 then
                         v_next_frame := s_frame_counter + 1;
@@ -359,7 +406,7 @@ begin
                       o_fifo_rollback <= '1';
                       o_error_code    <= x"4000";
                       o_error_pulse   <= '1';
-                      enter_resync(s_state, s_segment_state, s_resync_count,
+                      enter_resync(s_state, s_segment_state,
                                    s_sck, s_in_candidate, s_expected_segment);
                     end if;
                   else
@@ -407,7 +454,7 @@ begin
                   end if;
                   o_error_code  <= x"3000";
                   o_error_pulse <= '1';
-                  enter_resync(s_state, s_segment_state, s_resync_count,
+                  enter_resync(s_state, s_segment_state,
                                s_sck, s_in_candidate, s_expected_segment);
                 end if;
               end if;
@@ -419,24 +466,34 @@ begin
                 if s_packet_number = C_PACKETS_PER_SEGMENT - 1 then
                   s_in_candidate  <= '0';
                   s_segment_state <= no_segment;
-                  -- There is no VSYNC pin on the breakout. Keep /CS asserted
-                  -- and clock the stream continuously so the next packet-zero
-                  -- boundary is found over SPI. /CS is raised only by the
-                  -- timed hard-resynchronization state.
+                  -- Once packet zero establishes alignment, keep /CS low for
+                  -- the complete 60-packet segment. End the transaction only
+                  -- after packet 59, with the explicit post-clock hold time.
+                  s_hold_count <= 0;
+                  s_state      <= cs_hold_state;
                 else
                   s_expected_packet <= s_packet_number + 1;
                 end if;
               end if;
 
-              -- Keep /CS asserted while searching and between segments.
+              -- Bound the packet search; the independent watchdog performs
+              -- the documented long /CS-high resynchronization if no segment
+              -- descriptor is produced.
               if s_segment_state = no_segment then
                 if s_search_count = G_SEARCH_PACKETS - 1 then
                   s_search_count <= 0;
-                  enter_resync(s_state, s_segment_state, s_resync_count,
-                               s_sck, s_in_candidate, s_expected_segment);
                 else
                   s_search_count <= s_search_count + 1;
                 end if;
+              end if;
+
+              -- Without VSYNC, frame each discard/search packet separately so
+              -- packet zero remains discoverable. After packet zero is found,
+              -- the segment state is no longer no_segment and /CS stays low
+              -- continuously through packet 59.
+              if s_segment_state = no_segment then
+                s_hold_count <= 0;
+                s_state      <= cs_hold_state;
               end if;
             else
               s_byte_index <= s_byte_index + 1;

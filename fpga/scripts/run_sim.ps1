@@ -9,11 +9,15 @@ try {
   vcom -2008 (Join-Path $root "rtl\lepton_pkg.vhd")
   vcom -2008 (Join-Path $root "rtl\byte_fifo.vhd")
   vcom -2008 (Join-Path $root "rtl\uart_tx.vhd")
+  vcom -2008 (Join-Path $root "rtl\uart_rx.vhd")
+  vcom -2008 (Join-Path $root "rtl\lcd_streamer.vhd")
   vcom -2008 (Join-Path $root "rtl\lepton_vospi_capture.vhd")
   vcom -2008 (Join-Path $root "rtl\lepton_stream_formatter.vhd")
   vcom -2008 (Join-Path $root "rtl\forgix_lepton_top.vhd")
+  vcom -2008 (Join-Path $root "rtl\forgix_lepton_round_top.vhd")
   vcom -2008 (Join-Path $root "sim\tb_byte_fifo.vhd")
   vcom -2008 (Join-Path $root "sim\tb_uart_tx.vhd")
+  vcom -2008 (Join-Path $root "sim\tb_lcd_streamer.vhd")
   vcom -2008 (Join-Path $root "sim\tb_lepton_capture.vhd")
   vcom -2008 (Join-Path $root "sim\tb_stream_formatter.vhd")
   vcom -2008 (Join-Path $root "sim\tb_capture_stream.vhd")
@@ -29,6 +33,18 @@ try {
   $uartOutput | ForEach-Object { Write-Host $_ }
   if ($uartExit -ne 0 -or (($uartOutput -join "`n") -match '\*\* (Failure|Fatal|Error):')) {
     throw "UART simulation reported a failure (exit code $uartExit)"
+  }
+  $lcdOutput = & vsim -c -do "run -all; quit -f" work.tb_lcd_streamer 2>&1
+  $lcdExit = $LASTEXITCODE
+  $lcdOutput | ForEach-Object { Write-Host $_ }
+  if ($lcdExit -ne 0 -or (($lcdOutput -join "`n") -match '\*\* (Failure|Fatal|Error):')) {
+    throw "LCD streamer simulation reported a failure (exit code $lcdExit)"
+  }
+  $lcdRoundOutput = & vsim -c -gG_GC9A01A=true -do "run -all; quit -f" work.tb_lcd_streamer 2>&1
+  $lcdRoundExit = $LASTEXITCODE
+  $lcdRoundOutput | ForEach-Object { Write-Host $_ }
+  if ($lcdRoundExit -ne 0 -or (($lcdRoundOutput -join "`n") -match '\*\* (Failure|Fatal|Error):')) {
+    throw "Round LCD streamer simulation reported a failure (exit code $lcdRoundExit)"
   }
   $captureOutput = & vsim -c -do "run -all; quit -f" work.tb_lepton_capture 2>&1
   $captureExit = $LASTEXITCODE

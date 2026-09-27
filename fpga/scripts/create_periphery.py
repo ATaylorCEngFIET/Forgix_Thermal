@@ -6,17 +6,21 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
+import argparse
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--design-name", default="forgix_lepton")
+    args = parser.parse_args()
     root = Path(__file__).resolve().parent.parent
     sys.path.append(str(Path(os.environ["EFXPT_HOME"]) / "bin"))
 
     from api_service.design import DesignAPI
 
-    design_name = "forgix_lepton"
+    design_name = args.design_name
     peri_path = root / f"{design_name}.peri.xml"
-    isf_path = root / "constraints" / f"{design_name}_io.isf"
+    isf_path = root / "constraints" / "forgix_lepton_io.isf"
     outflow = root / "outflow"
 
     if peri_path.exists():

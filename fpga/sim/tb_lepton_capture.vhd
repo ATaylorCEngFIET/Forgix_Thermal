@@ -154,8 +154,8 @@ begin
     end loop;
     wait for 1 ns;
 
-    assert cam_cs_n = '0'
-      report "/CS was not held across the segment boundary" severity failure;
+    assert cam_cs_n = '1'
+      report "/CS was not released at the segment boundary" severity failure;
 
     assert mark_count = 1 report "valid segment was not checkpointed" severity failure;
     assert commit_count = 1 report "valid segment was not committed" severity failure;
@@ -165,7 +165,8 @@ begin
 
     -- Segment zero is part of an invalid Lepton 3.x frame.  The first twenty
     -- payload packets are speculative and must be rolled back at packet 20.
-    -- send_packet continues on the uninterrupted SPI clock stream.
+    -- The capture engine starts the next transaction after its short gap.
+    wait until cam_cs_n = '0';
     for packet_index in 0 to C_PACKETS_PER_SEGMENT - 1 loop
       send_packet(packet_index, 0);
     end loop;

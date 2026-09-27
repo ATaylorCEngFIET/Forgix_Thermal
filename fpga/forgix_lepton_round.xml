@@ -1,11 +1,11 @@
-<efx:project xmlns:efx="http://www.efinixinc.com/enf_proj" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="forgix_lepton" description="Forgix FLIR Lepton 3.5 VoSPI capture" sw_version="2025.2.288.2.10" xsi:schemaLocation="http://www.efinixinc.com/enf_proj enf_proj.xsd" last_run_state="pass" last_run_flow="bitstream" last_change="1790534755" config_result_in_sync="sync" design_ood="sync" place_ood="sync" route_ood="sync">
+<efx:project xmlns:efx="http://www.efinixinc.com/enf_proj" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" name="forgix_lepton_round" description="Forgix FLIR Lepton 3.5 VoSPI capture" sw_version="2025.2.288.2.10" xsi:schemaLocation="http://www.efinixinc.com/enf_proj enf_proj.xsd" last_run_state="pass" last_run_flow="bitstream" last_change="1790534822" config_result_in_sync="sync" design_ood="sync" place_ood="sync" route_ood="sync">
   <efx:device_info>
     <efx:family name="Trion" />
     <efx:device name="T8F49" />
     <efx:timing_model name="I2" />
   </efx:device_info>
   <efx:design_info def_veri_version="verilog_2k" def_vhdl_version="vhdl_2008" unified_flow="true">
-    <efx:top_module name="forgix_lepton" />
+    <efx:top_module name="forgix_lepton_round" />
     <efx:design_file name="rtl/lepton_pkg.vhd" version="default" library="default" />
     <efx:design_file name="rtl/byte_fifo.vhd" version="default" library="default" />
     <efx:design_file name="rtl/uart_tx.vhd" version="default" library="default" />
@@ -14,6 +14,7 @@
     <efx:design_file name="rtl/lepton_vospi_capture.vhd" version="default" library="default" />
     <efx:design_file name="rtl/lepton_stream_formatter.vhd" version="default" library="default" />
     <efx:design_file name="rtl/forgix_lepton_top.vhd" version="default" library="default" />
+    <efx:design_file name="rtl/forgix_lepton_round_top.vhd" version="default" library="default" />
     <efx:top_vhdl_arch name="rtl" />
   </efx:design_info>
   <efx:constraint_info>

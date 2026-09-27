@@ -139,13 +139,22 @@ def main() -> int:
     print(f"Opening {device}; close the plot window to stop")
     with serial.Serial(device, args.baud, timeout=0.05, write_timeout=1.0) as port:
         port.reset_input_buffer()
+        port.write(b"STREAM ON\n")
+        port.flush()
         viewer = Viewer(port, args.rotate, args.save_dir)
         plt.show(block=False)
-        while plt.fignum_exists(viewer.figure.number):
-            data = port.read(port.in_waiting or 1)
-            for frame in viewer.decoder.feed(data):
-                viewer.update(frame)
-            plt.pause(0.001)
+        try:
+            while plt.fignum_exists(viewer.figure.number):
+                data = port.read(port.in_waiting or 1)
+                for frame in viewer.decoder.feed(data):
+                    viewer.update(frame)
+                plt.pause(0.001)
+        finally:
+            try:
+                port.write(b"STREAM OFF\n")
+                port.flush()
+            except serial.SerialException:
+                pass
     return 0
 
 

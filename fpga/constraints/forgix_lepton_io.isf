@@ -20,6 +20,17 @@ design.create_output_gpio("o_cam_cs_n")
 design.create_output_gpio("o_cam_sck")
 design.create_input_gpio("i_cam_miso")
 design.set_property("i_cam_miso","PULL_OPTION","WEAK_PULLUP")
+design.create_output_gpio("o_lcd_din")
+design.create_output_gpio("o_lcd_clk")
+design.create_output_gpio("o_lcd_cs_n")
+design.create_output_gpio("o_lcd_dc")
+design.create_output_gpio("o_lcd_rst_n")
+design.create_output_gpio("o_lcd_bl")
+for lcd_output in (
+    "o_lcd_din", "o_lcd_clk", "o_lcd_cs_n",
+    "o_lcd_dc", "o_lcd_rst_n", "o_lcd_bl"
+):
+    design.set_property(lcd_output, "DRIVE_STRENGTH", "4")
 design.create_output_gpio("o_led_r_n")
 design.create_output_gpio("o_led_g_n")
 design.create_output_gpio("o_led_b_n")
@@ -38,6 +49,15 @@ design.assign_pkg_pin("io_cfg_uart_data","F2")
 design.assign_pkg_pin("o_cam_cs_n","A5")
 design.assign_pkg_pin("o_cam_sck","D7")
 design.assign_pkg_pin("i_cam_miso","C7")
+
+# Waveshare 1.8inch LCD Module on unused Forgix board-edge pins 9 through 14.
+# Power the module from 3.3 V so its SPI inputs use 3.3 V logic.
+design.assign_pkg_pin("o_lcd_din","D6")    # board pin 9
+design.assign_pkg_pin("o_lcd_clk","G7")    # board pin 10
+design.assign_pkg_pin("o_lcd_cs_n","G5")   # board pin 11
+design.assign_pkg_pin("o_lcd_dc","G2")     # board pin 12
+design.assign_pkg_pin("o_lcd_rst_n","F5")  # board pin 13
+design.assign_pkg_pin("o_lcd_bl","F6")     # board pin 14
 
 design.assign_pkg_pin("o_led_r_n","E1")
 design.assign_pkg_pin("o_led_g_n","F1")

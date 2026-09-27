@@ -1,4 +1,5 @@
 firmware/build/
+firmware/build_*/
 fpga/work_pnr/
 fpga/work_syn/
 fpga/sim/work/
@@ -8,4 +9,5 @@ captures/
 fpga/RUNPNR_*
 fpga/outflow/*
 !fpga/outflow/forgix_lepton.bin
+!fpga/outflow/forgix_lepton_round.bin
 __pycache__/
